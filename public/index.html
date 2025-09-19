@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>farmailos messenger</title>
+<style>
+  :root{--bg:#0b1220;--card:#071226;--accent:#7c3aed;--muted:#8b97a6;--text:#f5f9ff}
+  *{box-sizing:border-box}
+  body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,#030417,#071226);font-family:Inter,Segoe UI,Roboto,Arial;color:var(--text)}
+  .app{width:920px;max-width:100%;height:620px;background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01));border-radius:12px;display:grid;grid-template-columns:260px 1fr;overflow:hidden}
+  .left{padding:18px;border-right:1px solid rgba(255,255,255,0.02);display:flex;flex-direction:column}
+  .brand{font-weight:700;margin-bottom:12px}
+  .avatar{width:56px;height:56;border-radius:10px;background:linear-gradient(135deg,var(--accent),#06b6d4);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:20px}
+  .nameRow{display:flex;gap:12px;align-items:center;margin-top:10px}
+  .nameInput{width:100%;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:var(--text)}
+  .btn{padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:var(--muted);cursor:pointer}
+  .btn.primary{background:linear-gradient(90deg,var(--accent),#06b6d4);border:none;color:#001}
+  .muted{font-size:13px;color:var(--muted);margin-top:12px}
+  .right{display:flex;flex-direction:column}
+  .header{padding:18px;border-bottom:1px solid rgba(255,255,255,0.02);display:flex;align-items:center;justify-content:space-between}
+  .messages{flex:1;padding:18px;overflow:auto;display:flex;flex-direction:column;gap:10px;background:linear-gradient(180deg,transparent,rgba(0,0,0,0.02))}
+  .msg{max-width:68%;padding:10px 12px;border-radius:10px;background:rgba(255,255,255,0.02)}
+  .msg.me{margin-left:auto;background:linear-gradient(90deg,var(--accent),#06b6d4);color:#001}
+  .meta{font-size:12px;color:var(--muted);margin-bottom:6px}
+  .composer{padding:12px;border-top:1px solid rgba(255,255,255,0.02);display:flex;gap:8px;align-items:center}
+  .input{flex:1;padding:10px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:var(--text)}
+  @media (max-width:760px){.app{grid-template-columns:1fr;height:100vh;border-radius:0}.left{display:none}}
+</style>
+</head>
+<body>
+  <div class="app">
+    <div class="left">
+      <div class="brand">farmailos messenger</div>
+      <div class="nameRow">
+        <div class="avatar" id="avatar">?</div>
+        <input id="nameInput" class="nameInput" placeholder="Nickname" />
+      </div>
+      <div style="margin-top:12px;display:flex;gap:8px">
+        <button id="saveNameBtn" class="btn primary">Сохранить</button>
+        <button id="clearBtn" class="btn">Очистить</button>
+      </div>
+    </div>
+    <div class="right">
+      <div class="header">
+        <div id="roomTitle">Общий</div>
+        <div id="status" class="muted">offline</div>
+      </div>
+      <div class="messages" id="messages"></div>
+      <div class="composer">
+        <input id="messageInput" class="input" placeholder="Напишите сообщение..." />
+        <button id="sendBtn" class="btn primary">Отправить</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/';
+  const nameInput = document.getElementById('nameInput');
+  const saveNameBtn = document.getElementById('saveNameBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const avatarEl = document.getElementById('avatar');
+  const statusEl = document.getElementById('status');
+  const messagesEl = document.getElementById('messages');
+  const messageInput = document.getElementById('messageInput');
+  const sendBtn = document.getElementById('sendBtn');
+
+  const LS_NAME = 'farmailos_name_v1';
+
+  let name = localStorage.getItem(LS_NAME) || ('Guest' + Math.floor(Math.random()*900+100));
+  nameInput.value = name;
+  avatarEl.textContent = name.slice(0,1).toUpperCase();
+
+  saveNameBtn.addEventListener('click', ()=>{ const v = nameInput.value.trim(); if(v){ name = v; localStorage.setItem(LS_NAME, name); avatarEl.textContent = name.slice(0,1).toUpperCase(); } });
+  clearBtn.addEventListener('click', ()=>{ if(confirm('Очистить локальные настройки?')){ localStorage.removeItem(LS_NAME); name = 'Guest' + Math.floor(Math.random()*900+100); nameInput.value = name; avatarEl.textContent = name.slice(0,1).toUpperCase(); } });
+
+  let ws = null;
+  function connect(){
+    ws = new WebSocket(WS_URL);
+    ws.addEventListener('open', ()=>{ statusEl.textContent = 'online'; });
+    ws.addEventListener('close', ()=>{ statusEl.textContent = 'offline'; setTimeout(connect, 1500); });
+    ws.addEventListener('message', (ev)=>{
+      try{
+        const data = JSON.parse(ev.data);
+        if(data && data.type === 'msg' && data.payload){ appendMessage(data.payload); }
+      }catch(e){ console.warn('invalid', e); }
+    });
+  }
+
+  let localMode = false;
+  let bc = null;
+  function startLocalFallback(){
+    localMode = true; statusEl.textContent = 'local';
+    if(typeof BroadcastChannel === 'function'){
+      bc = new BroadcastChannel('farmailos_channel_v1');
+      bc.onmessage = ev=>{ if(ev.data && ev.data.type==='msg') appendMessage(ev.data.payload); };
+    }
+  }
+
+  try{
+    connect();
+    setTimeout(()=>{ if(statusEl.textContent !== 'online'){ startLocalFallback(); } }, 1500);
+  }catch(e){ startLocalFallback(); }
+
+  function sendMessage(){
+    const text = messageInput.value.trim(); if(!text) return;
+    const payload = { name: name, text: text, ts: Date.now() };
+    const msg = { type: 'msg', payload };
+    if(!localMode && ws && ws.readyState === WebSocket.OPEN){ ws.send(JSON.stringify(msg)); }
+    else{ if(bc) bc.postMessage({type:'msg', payload}); appendMessage(payload); }
+    messageInput.value = '';
+  }
+
+  sendBtn.addEventListener('click', sendMessage);
+  messageInput.addEventListener('keydown', (e)=>{ if(e.key==='Enter') sendMessage(); });
+
+  function appendMessage(m){
+    const el = document.createElement('div');
+    const me = m.name === name;
+    el.className = 'msg' + (me? ' me' : '');
+    const d = new Date(m.ts || Date.now());
+    const hh = String(d.getHours()).padStart(2,'0');
+    const mm = String(d.getMinutes()).padStart(2,'0');
+    el.innerHTML = `<div class="meta">${escapeHtml(m.name||'')} · ${hh}:${mm}</div><div>${escapeHtml(m.text||'')}</div>`;
+    messagesEl.appendChild(el);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function escapeHtml(s){ if(!s) return ''; return String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#39;'); }
+})();
+</script>
+</body>
+</html>
