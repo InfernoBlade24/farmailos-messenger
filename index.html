@@ -67,10 +67,12 @@
   const sendBtn = document.getElementById('sendBtn');
 
   const LS_NAME = 'farmailos_name_v1';
-
   let name = localStorage.getItem(LS_NAME) || ('Guest' + Math.floor(Math.random()*900+100));
   nameInput.value = name;
   avatarEl.textContent = name.slice(0,1).toUpperCase();
+
+  let isTyping = false;
+  let typingTimeout = null;
 
   saveNameBtn.addEventListener('click', ()=>{ const v = nameInput.value.trim(); if(v){ name = v; localStorage.setItem(LS_NAME, name); avatarEl.textContent = name.slice(0,1).toUpperCase(); } });
   clearBtn.addEventListener('click', ()=>{ if(confirm('Очистить локальные настройки?')){ localStorage.removeItem(LS_NAME); name = 'Guest' + Math.floor(Math.random()*900+100); nameInput.value = name; avatarEl.textContent = name.slice(0,1).toUpperCase(); } });
@@ -78,42 +80,77 @@
   let ws = null;
   function connect(){
     ws = new WebSocket(WS_URL);
-    ws.addEventListener('open', ()=>{ statusEl.textContent = 'online'; });
-    ws.addEventListener('close', ()=>{ statusEl.textContent = 'offline'; setTimeout(connect, 1500); });
+    
+    ws.addEventListener('open', ()=>{ 
+      statusEl.textContent = 'online'; 
+    });
+    
+    ws.addEventListener('close', ()=>{ 
+      statusEl.textContent = 'offline'; 
+      setTimeout(connect, 3000); 
+    });
+    
     ws.addEventListener('message', (ev)=>{
       try{
         const data = JSON.parse(ev.data);
-        if(data && data.type === 'msg' && data.payload){ appendMessage(data.payload); }
-      }catch(e){ console.warn('invalid', e); }
+        if(data && data.type === 'msg' && data.payload){ 
+          appendMessage(data.payload); 
+        } else if (data.type === 'history' && Array.isArray(data.payload)){
+          data.payload.forEach(msg => appendMessage(msg));
+        } else if (data.type === 'status'){
+          statusEl.textContent = data.payload;
+        }
+      }catch(e){ 
+        console.warn('invalid message from server', e); 
+      }
     });
   }
 
-  let localMode = false;
-  let bc = null;
-  function startLocalFallback(){
-    localMode = true; statusEl.textContent = 'local';
-    if(typeof BroadcastChannel === 'function'){
-      bc = new BroadcastChannel('farmailos_channel_v1');
-      bc.onmessage = ev=>{ if(ev.data && ev.data.type==='msg') appendMessage(ev.data.payload); };
+  connect();
+
+  function sendTypingStatus(isTyping){
+    if(ws && ws.readyState === WebSocket.OPEN){
+      ws.send(JSON.stringify({ type: 'typing', payload: { isTyping, name } }));
     }
   }
 
-  try{
-    connect();
-    setTimeout(()=>{ if(statusEl.textContent !== 'online'){ startLocalFallback(); } }, 1500);
-  }catch(e){ startLocalFallback(); }
-
   function sendMessage(){
-    const text = messageInput.value.trim(); if(!text) return;
-    const payload = { name: name, text: text, ts: Date.now() };
+    const text = messageInput.value.trim(); 
+    if(!text) return;
+    const payload = { name: name, text: text };
     const msg = { type: 'msg', payload };
-    if(!localMode && ws && ws.readyState === WebSocket.OPEN){ ws.send(JSON.stringify(msg)); }
-    else{ if(bc) bc.postMessage({type:'msg', payload}); appendMessage(payload); }
+    
+    if(ws && ws.readyState === WebSocket.OPEN){ 
+      ws.send(JSON.stringify(msg)); 
+    } else {
+      console.error('WebSocket is not connected.');
+    }
+    
     messageInput.value = '';
+    
+    // Остановить индикацию набора текста
+    isTyping = false;
+    sendTypingStatus(false);
+    clearTimeout(typingTimeout);
   }
 
   sendBtn.addEventListener('click', sendMessage);
-  messageInput.addEventListener('keydown', (e)=>{ if(e.key==='Enter') sendMessage(); });
+  messageInput.addEventListener('keydown', (e)=>{ 
+    if(e.key==='Enter'){
+      sendMessage();
+    } else {
+      // Отправлять статус набора текста
+      if(!isTyping){
+        isTyping = true;
+        sendTypingStatus(true);
+      }
+      clearTimeout(typingTimeout);
+      typingTimeout = setTimeout(()=>{
+        isTyping = false;
+        sendTypingStatus(false);
+      }, 1500); // 1.5 секунды бездействия
+    }
+  });
 
   function appendMessage(m){
     const el = document.createElement('div');
@@ -127,7 +164,7 @@
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
-  function escapeHtml(s){ if(!s) return ''; return String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#39;'); }
+  function escapeHtml(s){ if(!s) return ''; return String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#39;"); }
 })();
 </script>
 </body>
